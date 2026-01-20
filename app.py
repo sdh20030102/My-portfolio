@@ -9,7 +9,7 @@ import time
 
 # 페이지 설정
 st.set_page_config(page_title="내 주식 현황판", layout="wide")
-st.title("🚀 내 포트폴리오 (업데이트 성공!!)")
+st.title("🚀 내 포트폴리오 (최종 디버깅 모드)")
 
 # ---------------------------------------------------------
 # ▼▼ 내 포트폴리오 설정 ▼▼
@@ -34,7 +34,7 @@ my_portfolio = {
     '종목코드': [
         '005930', '000660', '079550', '086790', '064350',
         '005380', '271560', '000880', '003550', '0117V0',
-        '0154F0', # 대문자로 적었지만, 혹시 소문자여도 아래 코드에서 자동으로 고쳐줍니다!
+        '0154F0', # 🚨 여기가 문제! (아래 팁 참고)
         '033780', '105560', '066570', '298040',
         '329180', '0153K0', 
         'GOOG', 'QQQ', 'TQQQ', 'TSLA',
@@ -58,10 +58,11 @@ my_portfolio = {
     ]
 }
 
+# 🇰🇷 한국 주식 크롤링 (네이버)
 def get_naver_price(code):
     try:
         url = f"https://finance.naver.com/item/main.naver?code={code}"
-        headers = {'User-Agent': 'Mozilla/5.0'}
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
         response = requests.get(url, headers=headers)
         soup = BeautifulSoup(response.text, 'html.parser')
         price_area = soup.select_one('.no_today .blind')
@@ -73,6 +74,7 @@ def get_naver_price(code):
     except:
         return 0
 
+# 🇺🇸 미국 주식 크롤링 (야후)
 def get_yahoo_price(code, exchange_rate):
     try:
         ticker = yf.Ticker(code)
@@ -87,26 +89,39 @@ def load_data():
     df = pd.DataFrame(my_portfolio)
     current_prices = []
     exchange_rate = 1450
+    errors = []
 
     progress_bar = st.progress(0)
     total = len(df)
 
     for i, raw_code in enumerate(df['종목코드']):
-        # ✅ [핵심 수정] 무조건 대문자로 변환해서 처리 (소문자 문제 해결)
+        # 대문자 강제 변환
         code = str(raw_code).upper().strip()
+        price = 0
         
-        # 한국 주식 (숫자로 시작)
+        # 1. 한국 주식 (숫자로 시작하면 무조건 시도)
         if code[0].isdigit():
-            price = get_naver_price(code) 
+            # [시도 1] 네이버 금융 크롤링
+            price = get_naver_price(code)
+            
+            # [시도 2] 실패 시 FDR (KRX 데이터) 사용
             if price == 0:
                 try:
                     stock_data = fdr.DataReader(code)
-                    price = stock_data['Close'].iloc[-1]
+                    if not stock_data.empty:
+                        price = stock_data['Close'].iloc[-1]
                 except:
-                    price = 0
-        # 미국 주식
+                    pass
+            
+            # [시도 3] 그래도 0원이면 에러 목록에 추가
+            if price == 0:
+                errors.append(f"{df['종목명'][i]}({code})")
+
+        # 2. 미국 주식
         else:
             price = get_yahoo_price(code, exchange_rate)
+            if price == 0:
+                errors.append(f"{df['종목명'][i]}({code})")
 
         current_prices.append(price)
         progress_bar.progress((i + 1) / total)
@@ -123,20 +138,25 @@ def load_data():
     )
 
     df['수익률(%)'] = ((df['계산용_현재가'] - df['매수단가_원화']) / df['매수단가_원화']) * 100
-
-    return df
+    
+    return df, errors
 
 if st.button('⚡ 강제 새로고침 (실시간)'):
     st.cache_data.clear()
     st.rerun()
 
 try:
-    df_result = load_data()
+    df_result, error_stocks = load_data()
 
     total_asset = df_result['평가금액'].sum()
     total_asset_eok = total_asset // 100000000
     total_asset_man = (total_asset % 100000000) // 10000
     st.metric(label="💰 총 자산 (추정)", value=f"{total_asset_eok:.0f}억 {total_asset_man:.0f}만 원 (₩{total_asset:,.0f})")
+
+    # 🚨 에러 발생 시 힌트 제공
+    if error_stocks:
+        st.error(f"⚠️ 다음 종목의 가격을 못 가져왔어요: {', '.join(error_stocks)}")
+        st.info("💡 팁: 'WON 초대형IB'는 오늘(1/20) 상장해서 네이버에 아직 없을 수 있습니다. 네이버 금융에서 종목명으로 검색해서 나오는 '숫자 6자리 코드(예: 4xxxxx)'를 넣어보세요!")
 
     fig = px.treemap(
         df_result,
@@ -159,10 +179,6 @@ try:
 
     st.plotly_chart(fig, use_container_width=True)
 
-    if (df_result['현재가'] == 0).any():
-        zeros = df_result[df_result['현재가'] == 0]['종목명'].tolist()
-        st.warning(f"⚠️ 가격을 못 가져온 종목이 있어요: {zeros}")
-
     with st.expander("📊 상세 표 보기 (클릭)"):
         st.dataframe(
             df_result[['섹터', '종목명', '수량', '현재가', '수익률(%)', '평가금액']].style.format({
@@ -175,4 +191,3 @@ try:
 
 except Exception as e:
     st.error(f"오류: {e}")
-
