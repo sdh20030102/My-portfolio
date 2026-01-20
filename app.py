@@ -5,14 +5,13 @@ import pandas as pd
 import plotly.express as px
 import requests
 from bs4 import BeautifulSoup
-import time
 
 # 페이지 설정
-st.set_page_config(page_title="내 주식 현황판", layout="wide")
-st.title("🚀 내 포트폴리오 (최종 디버깅 모드)")
+st.set_page_config(page_title="시장 현황판", layout="wide")
+st.title("🚀 오늘의 시장 지도 & 내 자산 현황")
 
 # ---------------------------------------------------------
-# ▼▼ 내 포트폴리오 설정 ▼▼
+# ▼▼ 포트폴리오 설정 (매수단가 복구 완료!) ▼▼
 # ---------------------------------------------------------
 my_portfolio = {
     '섹터': [
@@ -34,7 +33,7 @@ my_portfolio = {
     '종목코드': [
         '005930', '000660', '079550', '086790', '064350',
         '005380', '271560', '000880', '003550', '0117V0',
-        '0154F0', # 🚨 여기가 문제! (아래 팁 참고)
+        '0154F0', # ✅ WON 초대형IB
         '033780', '105560', '066570', '298040',
         '329180', '0153K0', 
         'GOOG', 'QQQ', 'TQQQ', 'TSLA',
@@ -48,6 +47,7 @@ my_portfolio = {
         17, 2, 3, 4,
         2, 58, 4
     ],
+    # 내 수익률 계산을 위해 매수단가 복구!
     '매수단가': [
         117639, 736000, 523833, 98789, 196918,
         388518, 115500, 125000, 88428, 14450,
@@ -58,134 +58,178 @@ my_portfolio = {
     ]
 }
 
-# 🇰🇷 한국 주식 크롤링 (네이버)
-def get_naver_price(code):
+# 🇰🇷 한국 주식 (네이버)
+def get_naver_data(code):
     try:
         url = f"https://finance.naver.com/item/main.naver?code={code}"
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+        headers = {'User-Agent': 'Mozilla/5.0'}
         response = requests.get(url, headers=headers)
         soup = BeautifulSoup(response.text, 'html.parser')
+        
         price_area = soup.select_one('.no_today .blind')
-        if not price_area:
-             price_area = soup.select_one('.no_today')
-        if price_area:
-            return int(price_area.text.replace(',', '').strip())
-        return 0
+        if not price_area: return 0, 0
+        current_price = int(price_area.text.replace(',', '').strip())
+        
+        prev_area = soup.select_one('.no_exday .blind')
+        if not prev_area: return current_price, current_price
+        prev_close = int(prev_area.text.replace(',', '').strip())
+        
+        return current_price, prev_close
     except:
-        return 0
+        return 0, 0
 
-# 🇺🇸 미국 주식 크롤링 (야후)
-def get_yahoo_price(code, exchange_rate):
+# 🇺🇸 미국 주식 (야후)
+def get_yahoo_data(code, exchange_rate):
     try:
         ticker = yf.Ticker(code)
-        data = ticker.history(period="1d", interval="1m", prepost=True)
-        if not data.empty:
-            return data['Close'].iloc[-1] * exchange_rate
-        return 0
+        data = ticker.history(period="5d") 
+        
+        if len(data) >= 2:
+            current_price = data['Close'].iloc[-1] * exchange_rate
+            prev_close = data['Close'].iloc[-2] * exchange_rate
+            return current_price, prev_close
+        elif len(data) == 1:
+             current_price = data['Close'].iloc[-1] * exchange_rate
+             return current_price, current_price
+        return 0, 0
     except:
-        return 0
+        return 0, 0
 
 def load_data():
     df = pd.DataFrame(my_portfolio)
     current_prices = []
-    exchange_rate = 1450
-    errors = []
+    prev_closes = []
+    exchange_rate = 1460 
 
     progress_bar = st.progress(0)
     total = len(df)
 
     for i, raw_code in enumerate(df['종목코드']):
-        # 대문자 강제 변환
         code = str(raw_code).upper().strip()
-        price = 0
         
-        # 1. 한국 주식 (숫자로 시작하면 무조건 시도)
+        # 한국 주식
         if code[0].isdigit():
-            # [시도 1] 네이버 금융 크롤링
-            price = get_naver_price(code)
-            
-            # [시도 2] 실패 시 FDR (KRX 데이터) 사용
-            if price == 0:
+            curr, prev = get_naver_data(code)
+            if curr == 0:
                 try:
-                    stock_data = fdr.DataReader(code)
-                    if not stock_data.empty:
-                        price = stock_data['Close'].iloc[-1]
+                    data = fdr.DataReader(code)
+                    curr = data['Close'].iloc[-1]
+                    prev = data['Close'].iloc[-2] if len(data) > 1 else curr
                 except:
-                    pass
-            
-            # [시도 3] 그래도 0원이면 에러 목록에 추가
-            if price == 0:
-                errors.append(f"{df['종목명'][i]}({code})")
-
-        # 2. 미국 주식
+                    curr, prev = 0, 0
+        # 미국 주식
         else:
-            price = get_yahoo_price(code, exchange_rate)
-            if price == 0:
-                errors.append(f"{df['종목명'][i]}({code})")
+            curr, prev = get_yahoo_data(code, exchange_rate)
 
-        current_prices.append(price)
+        current_prices.append(curr)
+        prev_closes.append(prev)
         progress_bar.progress((i + 1) / total)
 
     progress_bar.empty()
 
     df['현재가'] = current_prices
-    df['계산용_현재가'] = df.apply(lambda x: x['매수단가'] if x['현재가'] == 0 else x['현재가'], axis=1)
-    df['평가금액'] = df['계산용_현재가'] * df['수량']
+    df['전일종가'] = prev_closes
+    df['전일종가'] = df['전일종가'].replace(0, 1) 
 
+    # 시장 등락률 (어제 대비 오늘)
+    df['등락률(%)'] = ((df['현재가'] - df['전일종가']) / df['전일종가']) * 100
+    df['등락폭'] = df['현재가'] - df['전일종가']
+    df['평가금액'] = df['현재가'] * df['수량']
+
+    # 내 수익률 계산 (매수단가 대비)
+    # 한국 주식이면 그대로, 미국 주식이면 환율 곱해서 매수단가 계산
     df['매수단가_원화'] = df.apply(
-        lambda x: x['매수단가'] * exchange_rate if (not str(x['종목코드'])[0].isdigit()) else x['매수단가'],
+        lambda x: x['매수단가'] * exchange_rate if (not str(x['종목코드'])[0].isdigit()) else x['매수단가'], 
         axis=1
     )
+    df['투자원금'] = df['매수단가_원화'] * df['수량']
+    df['내수익금'] = df['평가금액'] - df['투자원금']
+    df['내수익률(%)'] = (df['내수익금'] / df['투자원금']) * 100
 
-    df['수익률(%)'] = ((df['계산용_현재가'] - df['매수단가_원화']) / df['매수단가_원화']) * 100
-    
-    return df, errors
+    return df
 
-if st.button('⚡ 강제 새로고침 (실시간)'):
+if st.button('⚡ 새로고침'):
     st.cache_data.clear()
     st.rerun()
 
 try:
-    df_result, error_stocks = load_data()
+    df_result = load_data()
 
-    total_asset = df_result['평가금액'].sum()
-    total_asset_eok = total_asset // 100000000
-    total_asset_man = (total_asset % 100000000) // 10000
-    st.metric(label="💰 총 자산 (추정)", value=f"{total_asset_eok:.0f}억 {total_asset_man:.0f}만 원 (₩{total_asset:,.0f})")
+    # 1. 메인 지도 (오늘 시장 상황)
+    st.subheader("📊 오늘의 시장 지도 (Market Map)")
+    
+    # 색상 함수 (상승=초록, 하락=빨강)
+    def format_color(val, type='percent'):
+        color = '#00CC00' if val > 0 else '#FF3333' if val < 0 else 'white'
+        if type == 'percent':
+            return f"<span style='color:{color}; font-weight:bold'>{val:+.2f}%</span>"
+        else:
+            return f"<span style='color:{color}'>({val:+,.0f})</span>"
 
-    # 🚨 에러 발생 시 힌트 제공
-    if error_stocks:
-        st.error(f"⚠️ 다음 종목의 가격을 못 가져왔어요: {', '.join(error_stocks)}")
-        st.info("💡 팁: 'WON 초대형IB'는 오늘(1/20) 상장해서 네이버에 아직 없을 수 있습니다. 네이버 금융에서 종목명으로 검색해서 나오는 '숫자 6자리 코드(예: 4xxxxx)'를 넣어보세요!")
+    df_result['HTML_등락률'] = df_result['등락률(%)'].apply(lambda x: format_color(x, 'percent'))
+    df_result['HTML_등락폭'] = df_result['등락폭'].apply(lambda x: format_color(x, 'value'))
 
     fig = px.treemap(
         df_result,
         path=['섹터', '종목명'],
-        values='평가금액',
-        color='수익률(%)',
-        color_continuous_scale=['#FF0000', '#F0F2F6', '#00FF00'],
+        values='평가금액', 
+        color='등락률(%)', 
+        color_continuous_scale=['#FF3333', '#262626', '#00CC00'], 
         color_continuous_midpoint=0,
         range_color=[-3, 3],
         height=900
     )
 
-    fig.data[0].customdata = df_result[['수익률(%)', '현재가', '평가금액']]
+    fig.data[0].customdata = df_result[['HTML_등락률', '현재가', 'HTML_등락폭']]
     fig.data[0].texttemplate = (
-        "<b><span style='font-size:20px'>%{label}</span></b><br>" +
-        "<span style='font-size:16px'>%{customdata[0]:.2f}%</span><br>" +
-        "<span style='font-size:14px'>₩%{customdata[1]:,.0f}</span>"
+        "<b><span style='font-size:24px'>%{label}</span></b><br><br>" +
+        "<span style='font-size:18px'>%{customdata[0]}</span><br>" + 
+        "<span style='font-size:16px'>₩%{customdata[1]:,.0f}</span><br>" + 
+        "<span style='font-size:14px'>%{customdata[2]}</span>"
     )
-    fig.update_layout(font=dict(family="Arial", size=14), margin=dict(t=30, l=10, r=10, b=10))
-
+    fig.update_layout(font=dict(family="Arial", size=14), margin=dict(t=20, l=10, r=10, b=10))
     st.plotly_chart(fig, use_container_width=True)
 
-    with st.expander("📊 상세 표 보기 (클릭)"):
+    # ---------------------------------------------------------
+    # ▼▼ 2. 내 자산 변동률 (요청하신 부분) ▼▼
+    # ---------------------------------------------------------
+    st.markdown("---")
+    st.subheader("💰 내 자산 성적표")
+
+    total_invest = df_result['투자원금'].sum()
+    total_eval = df_result['평가금액'].sum()
+    total_profit = total_eval - total_invest
+    total_rate = (total_profit / total_invest) * 100
+    
+    # 수익 여부에 따른 색상 (초록/빨강)
+    color_code = "green" if total_profit >= 0 else "red"
+    profit_sign = "+" if total_profit >= 0 else ""
+
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.metric("총 투자 원금", f"{total_invest:,.0f} 원")
+    with col2:
+        st.metric("현재 평가 금액", f"{total_eval:,.0f} 원")
+    with col3:
+        # 여기가 핵심입니다! 색상을 입혀서 크게 보여줍니다.
+        st.markdown(f"""
+        <div style="text-align: left;">
+            <p style="font-size: 1rem; margin-bottom: 0;">총 수익금 (수익률)</p>
+            <p style="font-size: 2rem; color: {color_code}; font-weight: bold; margin-top: 0;">
+                {profit_sign}{total_profit:,.0f}원 ({profit_sign}{total_rate:.2f}%)
+            </p>
+        </div>
+        """, unsafe_allow_html=True)
+
+    with st.expander("📊 상세 포트폴리오 보기"):
         st.dataframe(
-            df_result[['섹터', '종목명', '수량', '현재가', '수익률(%)', '평가금액']].style.format({
-                '수량': '{:,.0f}주',
+            df_result[['종목명', '수량', '매수단가', '현재가', '내수익률(%)', '평가금액']].style.format({
+                '수량': '{:,.0f}',
+                '매수단가': '{:,.0f}', # 원화 환산 기준 표시일 수 있음
                 '현재가': '₩{:,.0f}',
                 '평가금액': '₩{:,.0f}',
-                '수익률(%)': '{:+.2f}%'
+                '내수익률(%)': '{:+.2f}%'
             })
         )
 
