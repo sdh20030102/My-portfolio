@@ -12,7 +12,7 @@ st.set_page_config(page_title="내 주식 현황판", layout="wide")
 st.title("🚀 내 포트폴리오 (Real-time Hybrid)")
 
 # ---------------------------------------------------------
-# ▼▼ 내 포트폴리오 설정 (대문자 수정 완료!) ▼▼
+# ▼▼ 내 포트폴리오 설정 ▼▼
 # ---------------------------------------------------------
 my_portfolio = {
     '섹터': [
@@ -34,7 +34,7 @@ my_portfolio = {
     '종목코드': [
         '005930', '000660', '079550', '086790', '064350',
         '005380', '271560', '000880', '003550', '0117V0',
-        '0154F0', # ✅ 대문자 F로 수정 완료! (이제 뜰 겁니다)
+        '0154F0', # 대문자로 적었지만, 혹시 소문자여도 아래 코드에서 자동으로 고쳐줍니다!
         '033780', '105560', '066570', '298040',
         '329180', '0153K0', 
         'GOOG', 'QQQ', 'TQQQ', 'TSLA',
@@ -58,7 +58,6 @@ my_portfolio = {
     ]
 }
 
-# 🇰🇷 한국 주식 크롤링
 def get_naver_price(code):
     try:
         url = f"https://finance.naver.com/item/main.naver?code={code}"
@@ -74,7 +73,6 @@ def get_naver_price(code):
     except:
         return 0
 
-# 🇺🇸 미국 주식 크롤링
 def get_yahoo_price(code, exchange_rate):
     try:
         ticker = yf.Ticker(code)
@@ -93,9 +91,12 @@ def load_data():
     progress_bar = st.progress(0)
     total = len(df)
 
-    for i, code in enumerate(df['종목코드']):
-        # 한국 주식 (숫자 또는 숫자로 시작하는 코드)
-        if str(code)[0].isdigit():
+    for i, raw_code in enumerate(df['종목코드']):
+        # ✅ [핵심 수정] 무조건 대문자로 변환해서 처리 (소문자 문제 해결)
+        code = str(raw_code).upper().strip()
+        
+        # 한국 주식 (숫자로 시작)
+        if code[0].isdigit():
             price = get_naver_price(code) 
             if price == 0:
                 try:
@@ -132,13 +133,11 @@ if st.button('⚡ 강제 새로고침 (실시간)'):
 try:
     df_result = load_data()
 
-    # 총 자산 (보기 편하게)
     total_asset = df_result['평가금액'].sum()
     total_asset_eok = total_asset // 100000000
     total_asset_man = (total_asset % 100000000) // 10000
     st.metric(label="💰 총 자산 (추정)", value=f"{total_asset_eok:.0f}억 {total_asset_man:.0f}만 원 (₩{total_asset:,.0f})")
 
-    # 트리맵
     fig = px.treemap(
         df_result,
         path=['섹터', '종목명'],
@@ -176,3 +175,4 @@ try:
 
 except Exception as e:
     st.error(f"오류: {e}")
+
