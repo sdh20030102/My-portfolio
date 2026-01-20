@@ -3,12 +3,11 @@ import FinanceDataReader as fdr
 import yfinance as yf
 import pandas as pd
 import plotly.express as px
-import requests
-from bs4 import BeautifulSoup
+import datetime
 
 # 페이지 설정
 st.set_page_config(page_title="내 자산 현황", layout="wide")
-st.title("🚀 Market Map & My Portfolio (Final Ver.)")
+st.title("🚀 Market Map & My Portfolio (FDR Ver.)")
 
 # ---------------------------------------------------------
 # ▼▼ 1. 내 원금 설정 (고정) ▼▼
@@ -16,7 +15,7 @@ st.title("🚀 Market Map & My Portfolio (Final Ver.)")
 FIXED_PRINCIPAL = 163798147 
 
 # ---------------------------------------------------------
-# ▼▼ 2. 포트폴리오 설정 (누적수익률 계산을 위해 매수단가 복구!) ▼▼
+# ▼▼ 2. 포트폴리오 설정 ▼▼
 # ---------------------------------------------------------
 my_portfolio = {
     '섹터': [
@@ -38,9 +37,9 @@ my_portfolio = {
     '종목코드': [
         '005930', '000660', '079550', '086790', '064350',
         '005380', '271560', '000880', '003550', '0117V0',
-        '0154F0', # ✅ WON 초대형IB (네이버 엔진으로 찾음)
+        '0154F0', # WON 초대형IB
         '033780', '105560', '066570', '298040',
-        '329180', '0153K0', # ✅ KODEX 주주환원 (네이버 엔진으로 찾음)
+        '329180', '0153K0', # KODEX 주주환원
         'GOOG', 'QQQ', 'TQQQ', 'TSLA',
         'BRK-B', 'ZETA', 'QCOM'
     ],
@@ -52,7 +51,6 @@ my_portfolio = {
         17, 2, 3, 4,
         2, 58, 4
     ],
-    # 누적 수익률 계산용 매수단가 (이전 데이터 기반 복구)
     '매수단가': [
         117639, 736000, 523833, 98789, 196918,
         388518, 115500, 125000, 88428, 14450,
@@ -63,30 +61,26 @@ my_portfolio = {
     ]
 }
 
-# 🇰🇷 한국 주식 (네이버 금융 - 가장 정확함)
-def get_naver_data(code):
+# 🇰🇷 한국 주식 (FinanceDataReader 사용 - 0% 오류 해결)
+def get_korea_data(code):
     try:
-        url = f"https://finance.naver.com/item/main.naver?code={code}"
-        headers = {'User-Agent': 'Mozilla/5.0'}
-        response = requests.get(url, headers=headers)
-        soup = BeautifulSoup(response.text, 'html.parser')
+        # 최근 7일치 데이터를 가져옵니다 (주말/휴장일 고려 넉넉하게)
+        # FDR은 네이버/KRX 데이터를 표 형태로 가져오므로 HTML 구조 변경 영향 안 받음
+        start_date = (datetime.datetime.now() - datetime.timedelta(days=10)).strftime('%Y-%m-%d')
+        df = fdr.DataReader(code, start=start_date)
         
-        # 메타 태그 방식 (0% 오류 방지)
-        meta_desc = soup.find("meta", property="og:description")
-        if meta_desc:
-            content = meta_desc["content"]
-            parts = content.split(",") 
-            if len(parts) >= 3:
-                current_price = int(parts[0].replace('원', '').replace(',', '').strip())
-                rate_str = parts[2].strip().replace('%', '')
-                current_rate = float(rate_str)
-                return current_price, current_rate
-        
-        # 백업 방식
-        price_area = soup.select_one('.no_today .blind')
-        if price_area:
-            current_price = int(price_area.text.replace(',', '').strip())
-            return current_price, 0
+        if len(df) >= 1:
+            current_price = int(df['Close'].iloc[-1]) # 오늘 종가(현재가)
+            
+            # 전일 종가 구하기 (데이터가 2개 이상일 때만)
+            if len(df) >= 2:
+                prev_price = int(df['Close'].iloc[-2])
+                change_rate = ((current_price - prev_price) / prev_price) * 100
+            else:
+                change_rate = 0 # 신규상장 등 데이터 부족시
+                
+            return current_price, change_rate
+            
         return 0, 0
     except:
         return 0, 0
@@ -95,13 +89,12 @@ def get_naver_data(code):
 def get_yahoo_data(code, exchange_rate):
     try:
         ticker = yf.Ticker(code)
-        # fast_info 사용
+        # fast_info가 가장 빠르고 정확함
         current_price = ticker.fast_info.last_price
         prev_close = ticker.fast_info.previous_close
         
-        # 데이터 없으면 history 사용
-        if current_price is None:
-            hist = ticker.history(period="2d")
+        if current_price is None: # 데이터 없으면 히스토리 조회
+            hist = ticker.history(period="5d")
             if not hist.empty:
                 current_price = hist['Close'].iloc[-1]
                 prev_close = hist['Close'].iloc[-2] if len(hist) > 1 else current_price
@@ -132,19 +125,9 @@ def load_data():
     for i, raw_code in enumerate(df['종목코드']):
         code = str(raw_code).upper().strip()
         
-        # 한국 주식 (숫자로 시작) -> 네이버 사용 (WON, KODEX 해결용)
+        # 한국 주식 (숫자로 시작) -> FDR 사용
         if code[0].isdigit():
-            curr, rate = get_naver_data(code)
-            # 네이버 실패시 FDR 백업
-            if curr == 0:
-                try:
-                    data = fdr.DataReader(code)
-                    curr = data['Close'].iloc[-1]
-                    prev = data['Close'].iloc[-2] if len(data) > 1 else curr
-                    rate = ((curr - prev) / prev) * 100
-                except:
-                    pass
-        
+            curr, rate = get_korea_data(code)
         # 미국 주식 -> 야후 사용
         else:
             curr, rate = get_yahoo_data(code, exchange_rate)
@@ -162,8 +145,7 @@ def load_data():
     df['평가금액'] = df['현재가'] * df['수량']
     df['오늘등락폭'] = df['평가금액'] - (df['평가금액'] / (1 + df['오늘등락률(%)']/100))
     
-    # 누적 수익률 계산 (매수단가 활용)
-    # 미국 주식 매수단가 환율 적용
+    # 누적 수익률 계산
     df['매수단가_계산용'] = df.apply(
         lambda x: x['매수단가'] * exchange_rate if not str(x['종목코드'])[0].isdigit() else x['매수단가'], 
         axis=1
@@ -180,16 +162,17 @@ if st.button('⚡ 새로고침'):
 try:
     df_result = load_data()
 
-    # ▼▼▼ 1. 요청하신 [글씨 하얀색] 고정 함수 ▼▼▼
+    # ▼▼▼ [색상 강제 통일] 무조건 하얀색(white) 함수 ▼▼▼
     def format_white_text(val, type='percent'):
-        # 색상 조건 없이 무조건 white로 설정
         if type == 'percent':
             return f"<span style='color:white; font-weight:bold'>{val:+.2f}%</span>"
         else:
             return f"<span style='color:white'>({val:+,.0f})</span>"
 
+    # 모든 등락률과 등락폭을 하얀색으로 변환
     df_result['HTML_등락률'] = df_result['오늘등락률(%)'].apply(lambda x: format_white_text(x, 'percent'))
     
+    # 1주당 등락폭 계산
     df_result['1주당등락폭'] = df_result.apply(
         lambda x: x['오늘등락폭'] / x['수량'] if x['수량'] > 0 else 0, axis=1
     )
@@ -201,12 +184,14 @@ try:
         path=['섹터', '종목명'],
         values='평가금액', 
         color='오늘등락률(%)', 
+        # 색상: 하락(빨강) -> 보합(검정) -> 상승(초록)
         color_continuous_scale=['#FF3333', '#262626', '#00CC00'], 
         color_continuous_midpoint=0,
         range_color=[-3, 3],
         height=900
     )
     
+    # 지도 위 텍스트 설정 (전부 하얀색!)
     fig.data[0].customdata = df_result[['HTML_등락률', '현재가', 'HTML_등락폭']]
     fig.data[0].texttemplate = (
         "<b><span style='font-size:24px; color:white'>%{label}</span></b><br><br>" +
@@ -245,8 +230,8 @@ try:
             </div>
         """, unsafe_allow_html=True)
 
-    # ▼▼▼ 3. 요청하신 [상세 데이터] 표 변경 ▼▼▼
-    with st.expander("📊 상세 데이터 보기 (누적수익률 포함)"):
+    # ▼▼▼ 3. 상세 데이터 표 (요청하신 3개 항목만!) ▼▼▼
+    with st.expander("📊 상세 데이터 보기 (클릭)"):
         # 요청: 현재가, 평가금액, 누적상승률
         display_df = df_result[['종목명', '현재가', '평가금액', '누적수익률(%)']].copy()
         
