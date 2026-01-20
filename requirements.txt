@@ -1,8 +1,6 @@
 streamlit
-finance-datareader
-yfinance
 pandas
 plotly
+yfinance
 requests
 beautifulsoup4
-1xm1
