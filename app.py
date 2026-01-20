@@ -1,23 +1,19 @@
 import streamlit as st
-import FinanceDataReader as fdr
 import yfinance as yf
 import pandas as pd
 import plotly.express as px
-import requests
-from bs4 import BeautifulSoup
 
 # 페이지 설정
 st.set_page_config(page_title="내 자산 현황", layout="wide")
-st.title("🚀 Market Map & My Portfolio")
+st.title("🚀 Market Map & My Portfolio (Global ver.)")
 
 # ---------------------------------------------------------
-# ▼▼ 1. 내 원금 설정 (알려주신 금액으로 고정!) ▼▼
+# ▼▼ 1. 내 원금 설정 (고정) ▼▼
 # ---------------------------------------------------------
-# 172,883,881 - 9,085,734 = 163,798,147원
-FIXED_PRINCIPAL = 172883881 - 9085734 
+FIXED_PRINCIPAL = 163798147 
 
 # ---------------------------------------------------------
-# ▼▼ 2. 포트폴리오 종목 설정 ▼▼
+# ▼▼ 2. 포트폴리오 설정 ▼▼
 # ---------------------------------------------------------
 my_portfolio = {
     '섹터': [
@@ -36,13 +32,15 @@ my_portfolio = {
         'Alphabet C', 'Invesco QQQ', 'TQQQ', 'Tesla',
         'Berkshire B', 'Zeta Global', 'Qualcomm'
     ],
+    # 한국 주식은 숫자, 미국 주식은 티커
     '종목코드': [
         '005930', '000660', '079550', '086790', '064350',
         '005380', '271560', '000880', '003550', '0117V0',
-        '0154F0', # ✅ WON 초대형IB
+        '0154F0', # WON 초대형IB
         '033780', '105560', '066570', '298040',
         '329180', '0153K0', 
-        'GOOG', 'QQQ', 'TQQQ', 'TSLA',
+        'GOOG',   # ✅ 알파벳 (구글) 확인!
+        'QQQ', 'TQQQ', 'TSLA',
         'BRK-B', 'ZETA', 'QCOM'
     ],
     '수량': [
@@ -52,84 +50,74 @@ my_portfolio = {
         17, 800,
         17, 2, 3, 4,
         2, 58, 4
-    ],
-    # 원금을 직접 지정했으므로 개별 매수단가는 계산에서 제외 (0 처리)
-    '매수단가': [0] * 24
+    ]
 }
 
-# 🇰🇷 한국 주식 (네이버 메타 태그 크롤링)
-def get_naver_data(code):
+# 🌍 글로벌 통합 데이터 수집 함수 (야후 파이낸스 단일화)
+def get_market_data(code, exchange_rate=1460):
     try:
-        url = f"https://finance.naver.com/item/main.naver?code={code}"
-        headers = {'User-Agent': 'Mozilla/5.0'}
-        response = requests.get(url, headers=headers)
-        soup = BeautifulSoup(response.text, 'html.parser')
+        # 1. 티커 변환 (한국 주식은 뒤에 .KS 붙여야 야후가 인식함)
+        ticker_symbol = code
+        is_korea = False
         
-        # 메타 태그에서 등락률 바로 가져오기 (정확도 UP)
-        meta_desc = soup.find("meta", property="og:description")
-        if meta_desc:
-            content = meta_desc["content"]
-            parts = content.split(",") 
-            if len(parts) >= 3:
-                current_price = int(parts[0].replace('원', '').replace(',', '').strip())
-                rate_str = parts[2].strip().replace('%', '')
-                current_rate = float(rate_str)
-                return current_price, current_rate
+        if code[0].isdigit(): # 숫자로 시작하면 한국 주식
+            ticker_symbol = code + ".KS" 
+            is_korea = True
         
-        # 실패시 백업
-        price_area = soup.select_one('.no_today .blind')
-        current_price = int(price_area.text.replace(',', '').strip())
-        return current_price, 0
-    except:
-        return 0, 0
+        # 2. 데이터 가져오기 (fast_info 사용으로 속도 UP)
+        ticker = yf.Ticker(ticker_symbol)
+        
+        # fast_info는 실시간 데이터를 더 잘 가져옵니다.
+        current_price = ticker.fast_info.last_price
+        prev_close = ticker.fast_info.previous_close
+        
+        # 데이터가 없을 경우 (가끔 신규 상장주 등)
+        if current_price is None or prev_close is None:
+             # 히스토리 방식으로 재시도
+             hist = ticker.history(period="5d")
+             if len(hist) >= 1:
+                 current_price = hist['Close'].iloc[-1]
+                 prev_close = hist['Close'].iloc[-2] if len(hist) > 1 else current_price
+             else:
+                 return 0, 0
 
-# 🇺🇸 미국 주식 (야후)
-def get_yahoo_data(code, exchange_rate):
-    try:
-        ticker = yf.Ticker(code)
-        data = ticker.history(period="5d")
-        if len(data) >= 2:
-            current_price = data['Close'].iloc[-1] * exchange_rate
-            prev_close = data['Close'].iloc[-2] * exchange_rate
-            rate = ((current_price - prev_close) / prev_close) * 100
-            return current_price, rate
-        elif len(data) == 1:
-             current_price = data['Close'].iloc[-1] * exchange_rate
-             return current_price, 0
-        return 0, 0
-    except:
+        # 3. 미국 주식 환율 적용
+        if not is_korea:
+            current_price *= exchange_rate
+            prev_close *= exchange_rate
+
+        # 4. 등락률 계산
+        if prev_close > 0:
+            change_rate = ((current_price - prev_close) / prev_close) * 100
+        else:
+            change_rate = 0
+
+        return current_price, change_rate
+
+    except Exception as e:
+        # 에러 발생 시 0 반환 (화면 멈춤 방지)
         return 0, 0
 
 def load_data():
     df = pd.DataFrame(my_portfolio)
     current_prices = []
     daily_rates = []
-    exchange_rate = 1460 # 환율
-
+    
+    # 진행률 표시 바
     progress_bar = st.progress(0)
     total = len(df)
 
-    for i, raw_code in enumerate(df['종목코드']):
-        code = str(raw_code).upper().strip()
+    for i, code in enumerate(df['종목코드']):
+        # 공백 제거 및 대문자 변환
+        clean_code = str(code).upper().strip()
         
-        # 한국 주식
-        if code[0].isdigit():
-            curr, rate = get_naver_data(code)
-            if curr == 0: # 백업
-                try:
-                    data = fdr.DataReader(code)
-                    curr = data['Close'].iloc[-1]
-                    prev = data['Close'].iloc[-2] if len(data) > 1 else curr
-                    rate = ((curr - prev) / prev) * 100
-                except:
-                    curr, rate = 0, 0
+        # 통합 함수 호출
+        curr, rate = get_market_data(clean_code)
         
-        # 미국 주식
-        else:
-            curr, rate = get_yahoo_data(code, exchange_rate)
-
         current_prices.append(curr)
         daily_rates.append(rate)
+        
+        # 진행률 업데이트
         progress_bar.progress((i + 1) / total)
 
     progress_bar.empty()
@@ -137,10 +125,10 @@ def load_data():
     df['현재가'] = current_prices
     df['오늘등락률(%)'] = daily_rates
     
-    # 평가금액 (현재 내 주식 가치)
+    # 평가금액 계산
     df['평가금액'] = df['현재가'] * df['수량']
     
-    # 오늘 하루 변동폭 (원)
+    # 오늘 등락폭(원) 역산
     df['오늘등락폭'] = df['평가금액'] - (df['평가금액'] / (1 + df['오늘등락률(%)']/100))
 
     return df
@@ -152,7 +140,7 @@ if st.button('⚡ 새로고침'):
 try:
     df_result = load_data()
 
-    # 색상 함수
+    # 색상 포맷팅 함수
     def format_color(val, type='percent'):
         color = '#00CC00' if val > 0 else '#FF3333' if val < 0 else 'white'
         if type == 'percent':
@@ -161,10 +149,16 @@ try:
             return f"<span style='color:{color}'>({val:+,.0f})</span>"
 
     df_result['HTML_등락률'] = df_result['오늘등락률(%)'].apply(lambda x: format_color(x, 'percent'))
-    df_result['1주당등락폭'] = df_result['오늘등락폭'] / df_result['수량']
+    
+    # 1주당 등락폭 계산 (보여주기용)
+    df_result['1주당등락폭'] = df_result.apply(
+        lambda x: x['오늘등락폭'] / x['수량'] if x['수량'] > 0 else 0, axis=1
+    )
     df_result['HTML_등락폭'] = df_result['1주당등락폭'].apply(lambda x: format_color(x, 'value'))
 
-    # 1. 트리맵: [오늘 시장 분위기] 보여줌 (등락률 기준)
+    # ---------------------------------------------------------
+    # ▼▼ 1. 트리맵 (오늘 시장 현황) ▼▼
+    # ---------------------------------------------------------
     fig = px.treemap(
         df_result,
         path=['섹터', '종목명'],
@@ -187,16 +181,14 @@ try:
     st.plotly_chart(fig, use_container_width=True)
 
     # ---------------------------------------------------------
-    # ▼▼ 2. 하단: [고정 원금 대비 수익률] ▼▼
+    # ▼▼ 2. 하단 박스 (고정 원금 대비 수익률) ▼▼
     # ---------------------------------------------------------
     st.markdown("---")
     
-    # 계산 로직: 현재 총 자산 - 고정 원금 = 총 수익금
     current_total_asset = df_result['평가금액'].sum()
     total_profit = current_total_asset - FIXED_PRINCIPAL
     total_return_rate = (total_profit / FIXED_PRINCIPAL) * 100
     
-    # 색상 결정
     total_color = "#00CC00" if total_profit >= 0 else "#FF3333"
     sign = "+" if total_profit >= 0 else ""
 
@@ -206,7 +198,6 @@ try:
     with c2:
         st.metric("현재 총 자산", f"{current_total_asset:,.0f} 원")
     with c3:
-        # 여기가 고정 원금 대비 수익률입니다!
         st.markdown(f"""
             <div style="background-color: #1E1E1E; padding: 15px; border-radius: 10px; border: 2px solid {total_color}; text-align:center;">
                 <p style="margin:0; font-size:16px; color:#AAAAAA;">총 수익률 (원금 대비)</p>
@@ -219,7 +210,7 @@ try:
             </div>
         """, unsafe_allow_html=True)
 
-    with st.expander("📊 상세 등락표 보기"):
+    with st.expander("📊 상세 데이터 보기"):
         st.dataframe(df_result[['종목명', '현재가', '오늘등락률(%)', '평가금액']].style.format({
             '현재가': '₩{:,.0f}',
             '오늘등락률(%)': '{:+.2f}%',
@@ -227,4 +218,4 @@ try:
         }))
 
 except Exception as e:
-    st.error(f"오류: {e}")
+    st.error(f"오류가 발생했습니다: {e}")
