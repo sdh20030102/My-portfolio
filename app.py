@@ -9,9 +9,9 @@ import yfinance as yf
 # 1. 기본 설정 및 포트폴리오
 # ---------------------------------------------------------
 st.set_page_config(page_title="My Portfolio", layout="wide")
-st.title("🚀 내 주식 현황판 (Final)")
+st.title("🚀 내 주식 현황판 (Naver Direct)")
 
-# 고정 원금 (사용자 설정)
+# 고정 원금
 FIXED_PRINCIPAL = 163798147 
 
 my_portfolio = {
@@ -22,28 +22,33 @@ my_portfolio = {
 }
 
 # ---------------------------------------------------------
-# 2. 데이터 수집 (네이버 + 야후)
+# 2. 데이터 따오기 (네이버 링크 직접 접속)
 # ---------------------------------------------------------
-def get_price_data(code):
+def get_stock_data(code):
     try:
-        # 한국 주식
+        # [한국 주식] 네이버 금융 페이지 직접 접속
         if code[0].isdigit():
             url = f"https://finance.naver.com/item/main.naver?code={code}"
             headers = {'User-Agent': 'Mozilla/5.0'}
-            res = requests.get(url, headers=headers, timeout=2)
+            res = requests.get(url, headers=headers, timeout=3)
             soup = BeautifulSoup(res.text, 'html.parser')
             
+            # 1. 현재가 (.no_today .blind)
             curr_tag = soup.select_one('.no_today .blind')
             if not curr_tag: return 0, 0
             curr = int(curr_tag.text.replace(',', ''))
             
+            # 2. 전일 종가 (.no_exday .blind) -> 등락률 계산용
             prev_tag = soup.select_one('.no_exday .blind')
-            prev = int(prev_tag.text.replace(',', '')) if prev_tag else curr
+            if prev_tag:
+                prev = int(prev_tag.text.replace(',', ''))
+                rate = ((curr - prev) / prev) * 100
+            else:
+                rate = 0
             
-            rate = ((curr - prev) / prev) * 100 if prev > 0 else 0
             return curr, rate
             
-        # 미국 주식
+        # [미국 주식] 야후 파이낸스
         else:
             t = yf.Ticker(code)
             h = t.history(period="2d")
@@ -51,82 +56,81 @@ def get_price_data(code):
             curr = h['Close'].iloc[-1]
             prev = h['Close'].iloc[-2]
             rate = ((curr - prev) / prev) * 100
-            return curr * 1460, rate # 환율 적용
+            return curr * 1460, rate # 환율 1460원 적용
     except:
         return 0, 0
 
 # ---------------------------------------------------------
-# 3. 메인 로직
+# 3. 데이터프레임 만들기
 # ---------------------------------------------------------
 if st.button('⚡ 데이터 새로고침'):
     st.cache_data.clear()
 
 @st.cache_data
-def make_df():
+def make_dataframe():
     df = pd.DataFrame(my_portfolio)
-    p_list, r_list = [], []
+    prices = []
+    rates = []
     
+    # 로딩바
     bar = st.progress(0)
     for i, code in enumerate(df['종목코드']):
-        p, r = get_price_data(code)
-        p_list.append(p)
-        r_list.append(r)
+        p, r = get_stock_data(code)
+        prices.append(p)
+        rates.append(r)
         bar.progress((i+1)/len(df))
     bar.empty()
     
-    df['현재가'] = p_list
-    df['등락률'] = r_list
+    df['현재가'] = prices
+    df['등락률'] = rates # 여기에는 순수한 숫자(float)만 들어갑니다! (rgb 문자열 X)
     df['평가금액'] = df['현재가'] * df['수량']
     return df
 
-df = make_df()
+df = make_dataframe()
 
 # ---------------------------------------------------------
-# 4. 지도 그리기 (핀비즈 스타일)
+# 4. 지도 그리기 (RGB 버그 완벽 수정)
 # ---------------------------------------------------------
 fig = px.treemap(
     df,
     path=['섹터', '종목명'],
     values='평가금액',
-    color='등락률',
-    color_continuous_scale=['#FF3333', '#333333', '#00CC00'],
+    color='등락률', # 숫자를 기준으로 색칠
+    color_continuous_scale=['#FF3333', '#333333', '#00CC00'], # 빨강 -> 검정 -> 초록
     range_color=[-3, 3]
 )
 
-# 텍스트 디자인: 종목명(대), 등락률(중), 가격(소, 숨김)
-fig.data[0].customdata = df['현재가']
+# [중요] 글자 표시 설정
+# customdata[0] = 등락률 숫자
+# customdata[1] = 현재가 숫자
+# 이렇게 숫자를 직접 넣어주면 rgb 글자가 나올 틈이 없습니다.
+fig.data[0].customdata = df[['등락률', '현재가']]
 fig.data[0].texttemplate = (
-    "<b><span style='font-size:28px; color:white'>%{label}</span></b><br><br>" +
-    "<b><span style='font-size:24px; color:white'>%{color:+.2f}%</span></b>"
+    "<b><span style='font-size:30px; color:white'>%{label}</span></b><br><br>" +
+    "<b><span style='font-size:25px; color:white'>%{customdata[0]:+.2f}%</span></b><br>"
+    # 가격은 필요하면 주석 해제하세요
+    # + "<span style='font-size:14px; color:#CCCCCC'>₩%{customdata[1]:,.0f}</span>"
 )
 fig.update_layout(margin=dict(t=0, l=0, r=0, b=0))
 
 st.plotly_chart(fig, use_container_width=True, height=750)
 
 # ---------------------------------------------------------
-# 5. 하단 핵심 요약 (원금 | 현재금액 | 누적수익률)
+# 5. 하단 핵심 요약
 # ---------------------------------------------------------
 st.markdown("---")
 
 total_asset = df['평가금액'].sum()
 profit = total_asset - FIXED_PRINCIPAL
 profit_rate = (profit / FIXED_PRINCIPAL) * 100
-color = "#00CC00" if profit > 0 else "#FF3333" # 초록 or 빨강
+color = "#00CC00" if profit > 0 else "#FF3333"
 
 c1, c2, c3 = st.columns(3)
-
-# 1) 원금
 c1.metric("💰 투자 원금", f"{FIXED_PRINCIPAL:,.0f} 원")
-
-# 2) 현재 금액
-c2.metric("📊 현재 총 자산", f"{total_asset:,.0f} 원", 
-          delta=f"{profit:+,.0f} 원 (변동금)", delta_color="off")
-
-# 3) 누적 상승률 (강조)
+c2.metric("📊 현재 총 자산", f"{total_asset:,.0f} 원", delta=f"{profit:+,.0f} 원", delta_color="off")
 c3.markdown(f"""
     <div style="text-align:center; padding:10px; border:2px solid {color}; border-radius:10px; background-color:#1E1E1E;">
         <span style="color:#AAA; font-size:14px;">누적 상승률</span><br>
         <span style="color:{color}; font-size:28px; font-weight:bold;">{profit_rate:+.2f}%</span>
     </div>
 """, unsafe_allow_html=True)
-
