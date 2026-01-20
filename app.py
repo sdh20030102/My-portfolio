@@ -6,14 +6,15 @@ from bs4 import BeautifulSoup
 import yfinance as yf
 
 # ---------------------------------------------------------
-# 1. 기본 설정 및 포트폴리오
+# 1. 페이지 설정
 # ---------------------------------------------------------
-st.set_page_config(page_title="My Portfolio", layout="wide")
-st.title("🚀 내 주식 현황판 (Naver Direct)")
+st.set_page_config(page_title="My Stock Map", layout="wide")
+st.title("🚀 내 주식 현황판 (Final Clean Ver.)")
 
 # 고정 원금
 FIXED_PRINCIPAL = 163798147 
 
+# 내 포트폴리오
 my_portfolio = {
     '섹터': ['반도체/IT', '반도체/IT', '방산/기계', '금융지주', '방산/기계', '자동차/소비재', '자동차/소비재', '방산/기계', '금융지주', '전력/인프라', '금융지주', '자동차/소비재', '금융지주', '가전/IT', '전력/인프라', '조선/중공업', '금융지주', '미국 빅테크', '미국 지수ETF', '미국 지수ETF', '미국 전기차', '미국 금융', '미국 빅테크', '미국 반도체'],
     '종목명': ['삼성전자', 'SK하이닉스', 'LIG넥스원', '하나금융지주', '현대로템', '현대차', '오리온', '한화', 'LG', 'TIGER AI전력기기', 'WON 초대형IB', 'KT&G', 'KB금융', 'LG전자', '효성중공업', 'HD현대중공업', 'KODEX 주주환원', 'Alphabet C', 'Invesco QQQ', 'TQQQ', 'Tesla', 'Berkshire B', 'Zeta Global', 'Qualcomm'],
@@ -22,23 +23,23 @@ my_portfolio = {
 }
 
 # ---------------------------------------------------------
-# 2. 데이터 따오기 (네이버 링크 직접 접속)
+# 2. 데이터 가져오기 (무조건 가져오는 로직)
 # ---------------------------------------------------------
-def get_stock_data(code):
+def get_real_data(code):
     try:
-        # [한국 주식] 네이버 금융 페이지 직접 접속
+        # [한국 주식] 코드가 숫자로 시작하면 네이버 직접 접속
         if code[0].isdigit():
             url = f"https://finance.naver.com/item/main.naver?code={code}"
             headers = {'User-Agent': 'Mozilla/5.0'}
-            res = requests.get(url, headers=headers, timeout=3)
+            res = requests.get(url, headers=headers, timeout=2)
             soup = BeautifulSoup(res.text, 'html.parser')
             
-            # 1. 현재가 (.no_today .blind)
+            # 현재가 찾기
             curr_tag = soup.select_one('.no_today .blind')
             if not curr_tag: return 0, 0
             curr = int(curr_tag.text.replace(',', ''))
             
-            # 2. 전일 종가 (.no_exday .blind) -> 등락률 계산용
+            # 전일 종가 찾기 (등락률 계산용)
             prev_tag = soup.select_one('.no_exday .blind')
             if prev_tag:
                 prev = int(prev_tag.text.replace(',', ''))
@@ -52,71 +53,72 @@ def get_stock_data(code):
         else:
             t = yf.Ticker(code)
             h = t.history(period="2d")
-            if len(h) < 2: return 0, 0
+            if len(h) < 2: return 0, 0 # 데이터 없으면 0
+            
             curr = h['Close'].iloc[-1]
             prev = h['Close'].iloc[-2]
             rate = ((curr - prev) / prev) * 100
+            
             return curr * 1460, rate # 환율 1460원 적용
     except:
         return 0, 0
 
 # ---------------------------------------------------------
-# 3. 데이터프레임 만들기
+# 3. 데이터프레임 생성
 # ---------------------------------------------------------
 if st.button('⚡ 데이터 새로고침'):
     st.cache_data.clear()
 
 @st.cache_data
-def make_dataframe():
+def make_data():
     df = pd.DataFrame(my_portfolio)
     prices = []
     rates = []
     
-    # 로딩바
+    # 로딩 바
     bar = st.progress(0)
     for i, code in enumerate(df['종목코드']):
-        p, r = get_stock_data(code)
+        p, r = get_real_data(code)
         prices.append(p)
         rates.append(r)
         bar.progress((i+1)/len(df))
     bar.empty()
     
     df['현재가'] = prices
-    df['등락률'] = rates # 여기에는 순수한 숫자(float)만 들어갑니다! (rgb 문자열 X)
+    df['등락률'] = rates # 여기엔 무조건 숫자만 들어감 (글자X)
     df['평가금액'] = df['현재가'] * df['수량']
     return df
 
-df = make_dataframe()
+df = make_data()
 
 # ---------------------------------------------------------
 # 4. 지도 그리기 (RGB 버그 완벽 수정)
 # ---------------------------------------------------------
+# 색상은 숫자에 따라 자동으로 칠해집니다.
 fig = px.treemap(
     df,
     path=['섹터', '종목명'],
     values='평가금액',
-    color='등락률', # 숫자를 기준으로 색칠
-    color_continuous_scale=['#FF3333', '#333333', '#00CC00'], # 빨강 -> 검정 -> 초록
-    range_color=[-3, 3]
+    color='등락률', 
+    color_continuous_scale=['#FF3333', '#222222', '#00CC00'], # 빨강 -> 검정 -> 초록
+    range_color=[-3, 3] # -3% ~ +3% 기준
 )
 
-# [중요] 글자 표시 설정
-# customdata[0] = 등락률 숫자
-# customdata[1] = 현재가 숫자
-# 이렇게 숫자를 직접 넣어주면 rgb 글자가 나올 틈이 없습니다.
-fig.data[0].customdata = df[['등락률', '현재가']]
+# [중요] 글자 디자인 직접 지정 (여기가 핵심!)
+# customdata[0] = 현재가
+# customdata[1] = 등락률
+fig.data[0].customdata = df[['현재가', '등락률']]
 fig.data[0].texttemplate = (
     "<b><span style='font-size:30px; color:white'>%{label}</span></b><br><br>" +
-    "<b><span style='font-size:25px; color:white'>%{customdata[0]:+.2f}%</span></b><br>"
-    # 가격은 필요하면 주석 해제하세요
-    # + "<span style='font-size:14px; color:#CCCCCC'>₩%{customdata[1]:,.0f}</span>"
+    "<b><span style='font-size:24px; color:white'>%{customdata[1]:+.2f}%</span></b><br>" +
+    "<span style='font-size:16px; color:#CCCCCC'>₩%{customdata[0]:,.0f}</span>"
 )
 fig.update_layout(margin=dict(t=0, l=0, r=0, b=0))
 
-st.plotly_chart(fig, use_container_width=True, height=750)
+st.plotly_chart(fig, use_container_width=True, height=800)
 
 # ---------------------------------------------------------
-# 5. 하단 핵심 요약
+# 5. 하단 요약 (원금/현재/누적)
 # ---------------------------------------------------------
 st.markdown("---")
 
@@ -134,3 +136,4 @@ c3.markdown(f"""
         <span style="color:{color}; font-size:28px; font-weight:bold;">{profit_rate:+.2f}%</span>
     </div>
 """, unsafe_allow_html=True)
+
