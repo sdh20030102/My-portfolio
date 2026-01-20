@@ -6,60 +6,57 @@ import plotly.express as px
 import requests
 from bs4 import BeautifulSoup
 import re
-import time
 
 # 페이지 설정
 st.set_page_config(page_title="내 자산 현황", layout="wide", page_icon="💰")
 st.title("🚀 Market Map & My Portfolio (Real-Time)")
 
 # ---------------------------------------------------------
-# ▼▼ 1. 내 원금 설정 (고정) ▼▼
+# ▼▼ 1. 내 원금 설정 (ETF 3종 제외 후 수정됨) ▼▼
 # ---------------------------------------------------------
-FIXED_PRINCIPAL = 136844147
-
+FIXED_PRINCIPAL = 136844147 
 
 # ---------------------------------------------------------
-# ▼▼ 2. 포트폴리오 설정 ▼▼
+# ▼▼ 2. 포트폴리오 설정 (3종목 삭제 완료) ▼▼
 # ---------------------------------------------------------
 my_portfolio = {
     '섹터': [
         '반도체/IT', '반도체/IT', '방산/기계', '금융지주', '방산/기계',
-        '자동차/소비재', '자동차/소비재', '방산/기계', '금융지주', '전력/인프라',
-        '금융지주', '자동차/소비재', '금융지주', '가전/IT', '전력/인프라',
-        '조선/중공업', '금융지주',
+        '자동차/소비재', '자동차/소비재', '방산/기계', '금융지주',
+        '자동차/소비재', '금융지주', '가전/IT', '전력/인프라',
+        '조선/중공업',
         '미국 빅테크', '미국 지수ETF', '미국 지수ETF', '미국 전기차',
         '미국 금융', '미국 빅테크', '미국 반도체'
     ],
     '종목명': [
         '삼성전자', 'SK하이닉스', 'LIG넥스원', '하나금융지주', '현대로템',
-        '현대차', '오리온', '한화', 'LG', 'TIGER AI전력기기',
-        'WON 초대형IB', 'KT&G', 'KB금융', 'LG전자', '효성중공업',
-        'HD현대중공업', 'KODEX 주주환원',
+        '현대차', '오리온', '한화', 'LG',
+        'KT&G', 'KB금융', 'LG전자', '효성중공업',
+        'HD현대중공업',
         'Alphabet C', 'Invesco QQQ', 'TQQQ', 'Tesla',
         'Berkshire B', 'Zeta Global', 'Qualcomm'
     ],
     '종목코드': [
         '005930', '000660', '079550', '086790', '064350',
-        '005380', '271560', '000880', '003550', '0117V0',
-        '0154F0', # ✅ WON 초대형IB
+        '005380', '271560', '000880', '003550',
         '033780', '105560', '066570', '298040',
-        '329180', '0153K0', # ✅ KODEX 주주환원
+        '329180', 
         'GOOG', 'QQQ', 'TQQQ', 'TSLA',
         'BRK-B', 'ZETA', 'QCOM'
     ],
     '수량': [
         151, 12, 39, 114, 20,
-        27, 32, 24, 90, 500,
-        1100, 80, 21, 25, 2,
-        17, 800,
+        27, 32, 24, 90,
+        80, 21, 25, 2,
+        17,
         17, 2, 3, 4,
         2, 58, 4
     ],
     '매수단가': [
         117639, 736000, 523833, 98789, 196918,
-        388518, 115500, 125000, 88428, 14450,
-        10350, 147500, 132605, 106700, 2208000,
-        615235, 10430,
+        388518, 115500, 125000, 88428,
+        147500, 132605, 106700, 2208000,
+        615235,
         287.55, 624.58, 54.50, 466.97,
         493.98, 23.52, 182.39
     ]
@@ -72,27 +69,26 @@ my_portfolio = {
 def get_exchange_rate():
     """실시간 원/달러 환율 조회"""
     try:
-        # 야후 파이낸스에서 원/달러 환율 가져오기
         ticker = yf.Ticker("KRW=X")
         data = ticker.history(period="1d")
-        rate = data['Close'].iloc[-1]
-        return rate
+        if not data.empty:
+            return data['Close'].iloc[-1]
+        return 1460.0
     except:
-        return 1460.0 # 에러 발생 시 안전장치
+        return 1460.0
 
 def get_naver_realtime(code):
     """네이버 금융 크롤링"""
     try:
         url = f"https://finance.naver.com/item/main.naver?code={code}"
         headers = {'User-Agent': 'Mozilla/5.0'}
-        response = requests.get(url, headers=headers, timeout=3) # 타임아웃 추가
+        response = requests.get(url, headers=headers, timeout=3)
         
         if response.status_code != 200:
             return 0, 0
             
         soup = BeautifulSoup(response.text, 'html.parser')
         
-        # 메타 태그 방식 (가장 빠름)
         meta_desc = soup.find("meta", property="og:description")
         if meta_desc:
             content = meta_desc["content"]
@@ -104,7 +100,6 @@ def get_naver_realtime(code):
             
             return current_price, current_rate
             
-        # HTML 파싱 방식 (백업)
         price_tag = soup.select_one('.no_today .blind')
         if price_tag:
             current_price = int(price_tag.text.replace(',', ''))
@@ -140,7 +135,7 @@ def get_yahoo_data(code, exchange_rate):
         return 0, 0
 
 # ---------------------------------------------------------
-# ▼▼ 데이터 로드 (캐싱 적용: 60초) ▼▼
+# ▼▼ 데이터 로드 (캐싱 적용) ▼▼
 # ---------------------------------------------------------
 @st.cache_data(ttl=60, show_spinner=False)
 def load_data():
@@ -148,18 +143,12 @@ def load_data():
     current_prices = []
     daily_rates = []
     
-    # 1. 환율 실시간 조회
     exchange_rate = get_exchange_rate()
-    st.session_state['exchange_rate'] = exchange_rate # 화면 표시용 저장
-
-    total = len(df)
-    # 진행바는 st.cache_data 내부에서 사용하면 UI에 남을 수 있어 제외하거나 주의 필요
-    # 여기서는 간단히 계산만 수행
     
     for raw_code in df['종목코드']:
         code = str(raw_code).upper().strip()
         
-        # 한국 주식
+        # 한국 주식 (숫자로 시작)
         if code[0].isdigit():
             curr, rate = get_naver_realtime(code)
             # 백업: FDR
@@ -181,7 +170,6 @@ def load_data():
     df['현재가'] = current_prices
     df['오늘등락률(%)'] = daily_rates
     
-    # 계산 로직
     df['평가금액'] = df['현재가'] * df['수량']
     df['오늘등락폭'] = df['평가금액'] - (df['평가금액'] / (1 + df['오늘등락률(%)']/100))
     
@@ -196,25 +184,22 @@ def load_data():
     return df, exchange_rate
 
 # ---------------------------------------------------------
-# ▼▼ UI 구현 ▼▼
+# ▼▼ 메인 UI ▼▼
 # ---------------------------------------------------------
 
-# 새로고침 버튼
 if st.button('⚡ 데이터 새로고침'):
     st.cache_data.clear()
     st.rerun()
 
 try:
-    with st.spinner("현재가 정보를 가져오는 중입니다..."):
+    with st.spinner("데이터를 불러오는 중입니다..."):
         df_result, applied_exchange_rate = load_data()
 
-    # 상단 환율 정보 표시
     st.caption(f"ℹ️ 적용 환율: 1 USD = {applied_exchange_rate:,.2f} KRW (실시간)")
 
-    # 포맷팅 함수
+    # 포맷팅 함수 (흰색 글씨)
     def format_white_text(val, type='percent'):
-        color = 'white' # 기본 흰색
-        # 필요시 상승/하락에 따라 화살표 추가 가능
+        color = 'white'
         if type == 'percent':
             return f"<span style='color:{color}; font-weight:bold'>{val:+.2f}%</span>"
         else:
@@ -227,7 +212,7 @@ try:
     )
     df_result['HTML_등락폭'] = df_result['1주당등락폭'].apply(lambda x: format_white_text(x, 'value'))
 
-    # 트리맵 그리기
+    # 트리맵
     fig = px.treemap(
         df_result,
         path=['섹터', '종목명'],
@@ -239,14 +224,13 @@ try:
         height=750
     )
     
-    # 텍스트 커스터마이징 (가독성 향상)
     fig.data[0].customdata = df_result[['HTML_등락률', '현재가', 'HTML_등락폭']]
     fig.data[0].texttemplate = (
         "<b><span style='font-size:20px; color:white'>%{label}</span></b><br>" +
         "<span style='font-size:16px'>%{customdata[0]}</span><br>" +
         "<span style='font-size:14px; color:#DDDDDD'>₩%{customdata[1]:,.0f}</span>"
     )
-    # 여백 및 폰트 설정
+    
     fig.update_layout(
         font=dict(family="Pretendard, Malgun Gothic, sans-serif"),
         margin=dict(t=20, l=10, r=10, b=10),
@@ -255,7 +239,7 @@ try:
     )
     st.plotly_chart(fig, use_container_width=True)
 
-    # 하단 수익률 대시보드
+    # 하단 정보창
     st.markdown("---")
     
     current_total_asset = df_result['평가금액'].sum()
@@ -265,9 +249,9 @@ try:
     total_color = "#00CC00" if total_profit >= 0 else "#FF3333"
     sign = "+" if total_profit >= 0 else ""
 
-    c1, c2, c3 = st.columns([1, 1, 1.5]) # 비율 조정
+    c1, c2, c3 = st.columns([1, 1, 1.5])
     with c1:
-        st.metric("💰 설정된 원금", f"{FIXED_PRINCIPAL:,.0f} 원")
+        st.metric("💰 설정된 원금 (ETF 제외)", f"{FIXED_PRINCIPAL:,.0f} 원")
     with c2:
         st.metric("📊 현재 총 자산", f"{current_total_asset:,.0f} 원", delta=f"{sign}{total_profit:,.0f} 원")
     with c3:
@@ -281,7 +265,6 @@ try:
             </div>
         """, unsafe_allow_html=True)
 
-    # 상세 데이터
     with st.expander("📂 상세 포트폴리오 데이터 확인"):
         display_df = df_result[['섹터', '종목명', '수량', '현재가', '평가금액', '누적수익률(%)']].copy()
         st.dataframe(
@@ -296,5 +279,3 @@ try:
 
 except Exception as e:
     st.error(f"⚠️ 오류가 발생했습니다: {e}")
-    st.write("잠시 후 다시 시도하거나, 네트워크 상태를 확인해주세요.")
-
