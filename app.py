@@ -12,7 +12,7 @@ st.set_page_config(page_title="내 주식 현황판", layout="wide")
 st.title("🚀 내 포트폴리오 (Real-time Hybrid)")
 
 # ---------------------------------------------------------
-# ▼▼ 내 포트폴리오 설정 (코드 업데이트 완료!) ▼▼
+# ▼▼ 내 포트폴리오 설정 (대문자 수정 완료!) ▼▼
 # ---------------------------------------------------------
 my_portfolio = {
     '섹터': [
@@ -34,9 +34,9 @@ my_portfolio = {
     '종목코드': [
         '005930', '000660', '079550', '086790', '064350',
         '005380', '271560', '000880', '003550', '0117V0',
-        '0154F0', # ✅ WON 초대형IB
+        '0154F0', # ✅ 대문자 F로 수정 완료! (이제 뜰 겁니다)
         '033780', '105560', '066570', '298040',
-        '329180', '0153K0', # ✅ KODEX 주주환원
+        '329180', '0153K0', 
         'GOOG', 'QQQ', 'TQQQ', 'TSLA',
         'BRK-B', 'ZETA', 'QCOM'
     ],
@@ -58,32 +58,27 @@ my_portfolio = {
     ]
 }
 
-# 🇰🇷 한국 주식 크롤링 (네이버 금융 직접 접속)
+# 🇰🇷 한국 주식 크롤링
 def get_naver_price(code):
     try:
         url = f"https://finance.naver.com/item/main.naver?code={code}"
         headers = {'User-Agent': 'Mozilla/5.0'}
         response = requests.get(url, headers=headers)
         soup = BeautifulSoup(response.text, 'html.parser')
-
-        # 현재가 태그 찾기 (모바일/PC 구조 대응)
         price_area = soup.select_one('.no_today .blind')
         if not price_area:
              price_area = soup.select_one('.no_today')
-
         if price_area:
             return int(price_area.text.replace(',', '').strip())
         return 0
     except:
         return 0
 
-# 🇺🇸 미국 주식 (프리/애프터장 반영)
+# 🇺🇸 미국 주식 크롤링
 def get_yahoo_price(code, exchange_rate):
     try:
         ticker = yf.Ticker(code)
-        # period='1d'로 해서 가장 최신 데이터만 가져옴
         data = ticker.history(period="1d", interval="1m", prepost=True)
-
         if not data.empty:
             return data['Close'].iloc[-1] * exchange_rate
         return 0
@@ -99,18 +94,16 @@ def load_data():
     total = len(df)
 
     for i, code in enumerate(df['종목코드']):
-        # 1. 한국 주식 (숫자로 시작하면 무조건 한국 주식으로 처리)
+        # 한국 주식 (숫자 또는 숫자로 시작하는 코드)
         if str(code)[0].isdigit():
-            price = get_naver_price(code) # 크롤링 우선
+            price = get_naver_price(code) 
             if price == 0:
-                # 크롤링 실패 시 FDR 백업 (예비용)
                 try:
                     stock_data = fdr.DataReader(code)
                     price = stock_data['Close'].iloc[-1]
                 except:
                     price = 0
-
-        # 2. 미국 주식 (그 외)
+        # 미국 주식
         else:
             price = get_yahoo_price(code, exchange_rate)
 
@@ -120,7 +113,6 @@ def load_data():
     progress_bar.empty()
 
     df['현재가'] = current_prices
-    # 0원이면 매수단가로 임시 대체 (그래프 깨짐 방지)
     df['계산용_현재가'] = df.apply(lambda x: x['매수단가'] if x['현재가'] == 0 else x['현재가'], axis=1)
     df['평가금액'] = df['계산용_현재가'] * df['수량']
 
@@ -140,13 +132,13 @@ if st.button('⚡ 강제 새로고침 (실시간)'):
 try:
     df_result = load_data()
 
-    # 총 자산 표시 (한글 + 숫자 조합으로 가독성 UP)
+    # 총 자산 (보기 편하게)
     total_asset = df_result['평가금액'].sum()
     total_asset_eok = total_asset // 100000000
     total_asset_man = (total_asset % 100000000) // 10000
     st.metric(label="💰 총 자산 (추정)", value=f"{total_asset_eok:.0f}억 {total_asset_man:.0f}만 원 (₩{total_asset:,.0f})")
 
-    # 트리맵 (디자인 대폭 개선!)
+    # 트리맵
     fig = px.treemap(
         df_result,
         path=['섹터', '종목명'],
@@ -158,44 +150,29 @@ try:
         height=900
     )
 
-    # ▼▼▼ 지도 디자인 핵심 수정 부분 ▼▼▼
-    # customdata에 필요한 정보들을 다 담습니다.
     fig.data[0].customdata = df_result[['수익률(%)', '현재가', '평가금액']]
-
-    # HTML 태그를 써서 디자인을 예쁘게 꾸맵니다.
-    # <b>: 굵게, <span style='font-size:...'>: 글자 크기 조절
     fig.data[0].texttemplate = (
-        "<b><span style='font-size:20px'>%{label}</span></b><br>" +  # 종목명 (크고 굵게)
-        "<span style='font-size:16px'>%{customdata[0]:.2f}%</span><br>" + # 수익률
-        "<span style='font-size:14px'>₩%{customdata[1]:,.0f}</span>" # 현재가
+        "<b><span style='font-size:20px'>%{label}</span></b><br>" +
+        "<span style='font-size:16px'>%{customdata[0]:.2f}%</span><br>" +
+        "<span style='font-size:14px'>₩%{customdata[1]:,.0f}</span>"
     )
-
-    # 전체적인 글꼴 스타일 조정
-    fig.update_layout(
-        font=dict(family="Arial", size=14),
-        margin=dict(t=30, l=10, r=10, b=10) # 여백 조정
-    )
-    # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
+    fig.update_layout(font=dict(family="Arial", size=14), margin=dict(t=30, l=10, r=10, b=10))
 
     st.plotly_chart(fig, use_container_width=True)
 
-    # 혹시라도 0원이면 경고
     if (df_result['현재가'] == 0).any():
         zeros = df_result[df_result['현재가'] == 0]['종목명'].tolist()
-        st.warning(f"⚠️ 아직 가격이 안 뜨는 종목이 있어요: {zeros}")
+        st.warning(f"⚠️ 가격을 못 가져온 종목이 있어요: {zeros}")
 
-    # 상세 표 보기 (숫자 포맷 적용)
     with st.expander("📊 상세 표 보기 (클릭)"):
         st.dataframe(
             df_result[['섹터', '종목명', '수량', '현재가', '수익률(%)', '평가금액']].style.format({
                 '수량': '{:,.0f}주',
                 '현재가': '₩{:,.0f}',
                 '평가금액': '₩{:,.0f}',
-                '수익률(%)': '{:+.2f}%' # 플러스/마이너스 기호 표시
+                '수익률(%)': '{:+.2f}%'
             })
         )
 
 except Exception as e:
     st.error(f"오류: {e}")
-
-
