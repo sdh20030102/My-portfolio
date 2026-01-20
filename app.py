@@ -5,12 +5,14 @@ import pandas as pd
 import plotly.express as px
 import requests
 from bs4 import BeautifulSoup
+import time
 
+# 페이지 설정
 st.set_page_config(page_title="내 주식 현황판", layout="wide")
 st.title("🚀 내 포트폴리오 (Real-time Hybrid)")
 
 # ---------------------------------------------------------
-# ▼▼ 내 포트폴리오 설정 ▼▼
+# ▼▼ 내 포트폴리오 설정 (코드 업데이트 완료!) ▼▼
 # ---------------------------------------------------------
 my_portfolio = {
     '섹터': [
@@ -32,8 +34,9 @@ my_portfolio = {
     '종목코드': [
         '005930', '000660', '079550', '086790', '064350', 
         '005380', '271560', '000880', '003550', '0117V0', 
-        '453470', '033780', '105560', '066570', '298040', 
-        '329180', '0153K0',
+        '0154f0', # ✅ WON 초대형IB (코드 적용 완료!)
+        '033780', '105560', '066570', '298040', 
+        '329180', '0153K0', # ✅ KODEX 주주환원
         'GOOG', 'QQQ', 'TQQQ', 'TSLA', 
         'BRK-B', 'ZETA', 'QCOM'
     ],
@@ -55,63 +58,70 @@ my_portfolio = {
     ]
 }
 
-# 🇰🇷 한국 주식 크롤링 함수 (네이버 금융 직접 접속)
+# 🇰🇷 한국 주식 크롤링 (네이버 금융 직접 접속)
 def get_naver_price(code):
     try:
         url = f"https://finance.naver.com/item/main.naver?code={code}"
-        headers = {'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)'}
+        headers = {'User-Agent': 'Mozilla/5.0'}
         response = requests.get(url, headers=headers)
         soup = BeautifulSoup(response.text, 'html.parser')
         
-        # 'no_today' 클래스가 현재가입니다.
-        price_text = soup.select_one('.no_today .blind').text
-        return int(price_text.replace(',', ''))
+        # 현재가 태그 찾기 (모바일/PC 구조 대응)
+        price_area = soup.select_one('.no_today .blind')
+        if not price_area:
+             price_area = soup.select_one('.no_today')
+             
+        if price_area:
+            return int(price_area.text.replace(',', '').strip())
+        return 0
     except:
         return 0
 
-@st.cache_data
+# 🇺🇸 미국 주식 (프리/애프터장 반영)
+def get_yahoo_price(code, exchange_rate):
+    try:
+        ticker = yf.Ticker(code)
+        # period='1d'로 해서 가장 최신 데이터만 가져옴
+        data = ticker.history(period="1d", interval="1m", prepost=True)
+        
+        if not data.empty:
+            return data['Close'].iloc[-1] * exchange_rate
+        return 0
+    except:
+        return 0
+
 def load_data():
     df = pd.DataFrame(my_portfolio)
     current_prices = []
     exchange_rate = 1450 
 
-    # 진행 상황바 표시 (크롤링이라 약간 시간 걸림)
     progress_bar = st.progress(0)
-    total_stocks = len(df)
+    total = len(df)
 
     for i, code in enumerate(df['종목코드']):
-        try:
-            # 1. 한국 주식 (숫자로 시작) -> 네이버 직접 크롤링!
-            if str(code)[0].isdigit():
-                price = get_naver_price(code)
-                # 크롤링 실패 시 백업으로 FDR 사용
-                if price == 0:
+        # 1. 한국 주식 (숫자로 시작하면 무조건 한국 주식으로 처리)
+        # 0154f0 같은 코드도 '0'으로 시작하므로 이쪽으로 들어옵니다.
+        if str(code)[0].isdigit():
+            price = get_naver_price(code) # 크롤링 우선
+            if price == 0:
+                # 크롤링 실패 시 FDR 백업 (예비용)
+                try:
                     stock_data = fdr.DataReader(code)
-                    if not stock_data.empty:
-                        price = stock_data['Close'].iloc[-1]
-            
-            # 2. 미국 주식 (영어로 시작) -> yfinance 프리장/애프터장
-            else:
-                ticker = yf.Ticker(code)
-                data = ticker.history(period="1d", prepost=True)
-                if not data.empty:
-                    price = data['Close'].iloc[-1] * exchange_rate
-                else:
+                    price = stock_data['Close'].iloc[-1]
+                except:
                     price = 0
-
-            current_prices.append(price)
-            
-        except Exception as e:
-            current_prices.append(0)
         
-        # 진행률 업데이트
-        progress_bar.progress((i + 1) / total_stocks)
+        # 2. 미국 주식 (그 외)
+        else:
+            price = get_yahoo_price(code, exchange_rate)
+
+        current_prices.append(price)
+        progress_bar.progress((i + 1) / total)
     
-    progress_bar.empty() # 로딩 끝나면 바 숨기기
+    progress_bar.empty()
     
     df['현재가'] = current_prices
-    
-    # 계산 로직
+    # 0원이면 매수단가로 임시 대체 (그래프 깨짐 방지)
     df['계산용_현재가'] = df.apply(lambda x: x['매수단가'] if x['현재가'] == 0 else x['현재가'], axis=1)
     df['평가금액'] = df['계산용_현재가'] * df['수량']
     
@@ -124,14 +134,15 @@ def load_data():
     
     return df
 
-if st.button('🔄 시세 새로고침 (네이버/야후 연동)'):
+if st.button('⚡ 강제 새로고침 (실시간)'):
     st.cache_data.clear()
+    st.rerun()
 
 try:
     df_result = load_data()
     
     total_asset = df_result['평가금액'].sum()
-    st.metric(label="💰 총 자산 현황", value=f"{total_asset:,.0f} 원")
+    st.metric(label="💰 총 자산 (추정)", value=f"{total_asset:,.0f} 원")
 
     fig = px.treemap(
         df_result, 
@@ -147,12 +158,18 @@ try:
     # 지도에 가격 표시
     fig.data[0].customdata = df_result[['수익률(%)', '현재가']]
     fig.data[0].texttemplate = "<b>%{label}</b><br>%{customdata[0]:.2f}%<br>₩%{customdata[1]:,.0f}"
-    
     fig.update_layout(font=dict(size=16))
+    
     st.plotly_chart(fig, use_container_width=True)
     
+    # 혹시라도 0원이면 경고
+    if (df_result['현재가'] == 0).any():
+        zeros = df_result[df_result['현재가'] == 0]['종목명'].tolist()
+        st.warning(f"⚠️ 아직 가격이 안 뜨는 종목이 있어요: {zeros}")
+        
     with st.expander("📊 상세 표 보기"):
         st.dataframe(df_result)
-        
+
 except Exception as e:
     st.error(f"오류: {e}")
+
