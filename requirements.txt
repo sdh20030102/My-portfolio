@@ -4,4 +4,3 @@ plotly
 yfinance
 requests
 beautifulsoup4
-
