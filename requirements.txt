@@ -2,3 +2,6 @@ streamlit
 finance-datareader
 plotly
 pandas
+yfinance
+beautifulsoup4
+requests
